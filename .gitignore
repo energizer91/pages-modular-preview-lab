@@ -1,0 +1,7 @@
+node_modules/
+styled-system/
+dist/
+.local/
+playwright-report/
+test-results/
+*.log

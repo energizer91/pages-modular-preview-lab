@@ -1,0 +1,6 @@
+import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';import os from 'node:os';import path from 'node:path';import {spawnSync} from 'node:child_process';
+test('two PRs reuse one immutable core, then close cleans only its own preview',()=>{
+ const site=fs.mkdtempSync(path.join(os.tmpdir(),'preview-lab-'));
+ const publish=(pr,remove=false)=>{const r=spawnSync(process.execPath,['scripts/publish.mjs','site='+site,'package=dist/package','pr='+pr,'sha=test',...(remove?['remove=true']:[])],{encoding:'utf8'});assert.equal(r.status,0,r.stdout+r.stderr);};
+ try{publish('main');publish('123');publish('124');const r=JSON.parse(fs.readFileSync(path.join(site,'report.json')));assert.equal(r.uniqueCores,1);assert.equal(r.previews.length,3);assert.ok(r.publishedBytes<r.fullCopiesEstimateBytes/2);assert.equal(fs.readdirSync(path.join(site,'pr','123','remote'),{recursive:true}).filter(p=>p.endsWith('.png')).length,0);publish('123',true);assert.ok(!fs.existsSync(path.join(site,'pr','123')));assert.ok(fs.existsSync(path.join(site,'pr','124','manifest.json')));}finally{const absolute=path.resolve(site);assert.ok(absolute.startsWith(path.resolve(os.tmpdir())+path.sep));fs.rmSync(absolute,{recursive:true,force:true});}
+});

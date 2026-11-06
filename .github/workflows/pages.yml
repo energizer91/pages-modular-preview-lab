@@ -1,0 +1,113 @@
+name: Build and publish previews
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+  workflow_dispatch:
+  schedule:
+    - cron: '17 3 * * *'
+permissions:
+  contents: read
+concurrency:
+  group: pages-publication
+  cancel-in-progress: false
+jobs:
+  build:
+    if: github.event.action != 'closed' && github.event_name != 'schedule' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+      - uses: actions/upload-artifact@v4
+        with:
+          name: preview-package
+          path: dist/package
+          retention-days: 3
+  publish:
+    needs: build
+    if: always() && (needs.build.result == 'success' || github.event.action == 'closed' || github.event_name == 'schedule') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          path: tooling
+      - uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          path: site
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: actions/download-artifact@v4
+        if: needs.build.result == 'success'
+        with:
+          name: preview-package
+          path: incoming
+      - name: Check current PR head
+        id: current
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+          ACTION: ${{ github.event.action }}
+        run: |
+          if [ -n "$PR" ] && [ "$ACTION" != closed ]; then
+            actual=$(gh api "repos/$REPOSITORY/pulls/$PR" --jq '.head.sha')
+            state=$(gh api "repos/$REPOSITORY/pulls/$PR" --jq '.state')
+            if [ "$actual" != "$EXPECTED_SHA" ] || [ "$state" != open ]; then
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+      - name: Update preview and storage report
+        if: steps.current.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number || 'main' }}
+          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          REMOVE: ${{ github.event.action == 'closed' }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT" = schedule ]; then
+            node tooling/scripts/reconcile.mjs site="$GITHUB_WORKSPACE/site" repository="$REPOSITORY"
+          else
+            node tooling/scripts/publish.mjs site="$GITHUB_WORKSPACE/site" package="$GITHUB_WORKSPACE/incoming" pr="$PR" sha="$SHA" remove="$REMOVE" repository="$REPOSITORY"
+          fi
+          cd site
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .
+          if ! git diff --cached --quiet; then
+            git commit -m "Publish preview and reconcile storage"
+            git push origin gh-pages
+          fi
+      - uses: actions/configure-pages@v5
+        if: steps.current.outputs.skip != 'true'
+      - uses: actions/upload-pages-artifact@v3
+        if: steps.current.outputs.skip != 'true'
+        with:
+          path: site
+      - uses: actions/deploy-pages@v4
+        if: steps.current.outputs.skip != 'true'
+        id: deployment
