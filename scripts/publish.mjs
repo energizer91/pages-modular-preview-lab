@@ -33,11 +33,20 @@ if(process.env.GH_TOKEN&&args.repository){
 }
 const manifests=walk(site).filter(p=>path.basename(p)==='manifest.json'&&!p.includes(path.sep+'cores'+path.sep));
 const previews=manifests.map(p=>({path:path.relative(site,path.dirname(p)).replaceAll('\\','/')||'.',...JSON.parse(fs.readFileSync(p,'utf8'))}));
-// Keep unreferenced cores for 24h so existing tabs can finish loading chunks.
-const used=new Set(previews.map(p=>p.coreId));const cores=path.join(site,'cores');if(fs.existsSync(cores))for(const id of fs.readdirSync(cores))if(!used.has(id)&&Date.now()-fs.statSync(path.join(cores,id)).mtimeMs>86400000)safeRemove(path.join(cores,id));
-const bytes=walk(site).filter(p=>!p.includes(path.sep+'.git'+path.sep)).reduce((n,p)=>n+fs.statSync(p).size,0);
+// Persist first-unreferenced timestamps: checkout resets filesystem mtimes.
+const used=new Set(previews.map(p=>p.coreId));const cores=path.join(site,'cores');
+const gcPath=path.join(site,'core-gc.json');const garbage=fs.existsSync(gcPath)?JSON.parse(fs.readFileSync(gcPath,'utf8')):{};
+if(fs.existsSync(cores))for(const id of fs.readdirSync(cores)){
+ if(used.has(id)){delete garbage[id];continue;}
+ garbage[id]??=new Date().toISOString();
+ if(Date.now()-Date.parse(garbage[id])>=86400000){safeRemove(path.join(cores,id));delete garbage[id];}
+}
+put(gcPath,JSON.stringify(garbage,null,2));
+const reportPath=path.join(site,'report.json');
+const bytes=walk(site).filter(p=>!p.includes(path.sep+'.git'+path.sep)&&p!==reportPath).reduce((n,p)=>n+fs.statSync(p).size,0);
 const report={publishedBytes:bytes,previews:previews.map(({label,path,coreId,remoteBytes})=>({label,path,coreId,remoteBytes})),uniqueCores:fs.existsSync(cores)?fs.readdirSync(cores).length:0,fullCopiesEstimateBytes:previews.reduce((n,p)=>n+p.coreBytes+p.remoteBytes,0)};
-put(path.join(site,'report.json'),JSON.stringify(report,null,2));put(path.join(site,'.nojekyll'),'');
-if(bytes>800*1024*1024)throw new Error('Site exceeded the 800 MiB publication budget');
+for(let i=0;i<5;i++)report.publishedBytes=bytes+Buffer.byteLength(JSON.stringify(report,null,2));
+put(reportPath,JSON.stringify(report,null,2));put(path.join(site,'.nojekyll'),'');
+if(report.publishedBytes>800*1024*1024)throw new Error('Site exceeded the 800 MiB publication budget');
 console.log(JSON.stringify(report,null,2));
 if(process.env.GITHUB_STEP_SUMMARY)fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,'## Preview storage\n\nPublished tree: '+bytes+' bytes. Full-copy estimate: '+report.fullCopiesEstimateBytes+' bytes. Shared cores: '+report.uniqueCores+'.\n\n'+previews.map(p=>'- '+p.label+': '+p.remoteBytes+' remote bytes; core '+p.coreId).join('\n')+'\n');
