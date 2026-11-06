@@ -1,13 +1,19 @@
 {
-  "publishedBytes": 4263831,
+  "publishedBytes": 4376388,
   "previews": [
     {
       "label": "Main preview",
       "path": ".",
       "coreId": "979fc99810320404",
       "remoteBytes": 109975
+    },
+    {
+      "label": "PR #1",
+      "path": "pr/1",
+      "coreId": "979fc99810320404",
+      "remoteBytes": 110081
     }
   ],
   "uniqueCores": 1,
-  "fullCopiesEstimateBytes": 4261293
+  "fullCopiesEstimateBytes": 8522692
 }

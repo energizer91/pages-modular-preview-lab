@@ -1,0 +1,10 @@
+{
+  "label": "PR #1",
+  "commit": "6a1a9bbc4ed71c9aaea292136cbc154d73253c97",
+  "coreId": "979fc99810320404",
+  "coreBytes": 4151318,
+  "remoteBytes": 110081,
+  "pngBytes": 3687983,
+  "entry": "./remote/remoteEntry.js",
+  "publishedAt": "2026-11-06T16:04:29.085Z"
+}
