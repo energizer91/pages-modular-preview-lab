@@ -1,9 +1,8 @@
-name: Build and publish previews
+name: Publish Pages previews
 on:
-  push:
-    branches: [main]
-  pull_request:
-    types: [opened, synchronize, reopened, closed]
+  workflow_run:
+    workflows: [Build preview package]
+    types: [completed]
   workflow_dispatch:
   schedule:
     - cron: '17 3 * * *'
@@ -13,33 +12,14 @@ concurrency:
   group: pages-publication
   cancel-in-progress: false
 jobs:
-  build:
-    if: github.event.action != 'closed' && github.event_name != 'schedule' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          persist-credentials: false
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-          cache: npm
-      - run: npm ci
-      - run: npm run build
-      - run: npm test
-      - uses: actions/upload-artifact@v4
-        with:
-          name: preview-package
-          path: dist/package
-          retention-days: 3
   publish:
-    needs: build
-    if: always() && (needs.build.result == 'success' || github.event.action == 'closed' || github.event_name == 'schedule') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    if: github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      pull-requests: read
+      actions: read
+      pull-requests: write
+      deployments: write
       pages: write
       id-token: write
     environment:
@@ -59,40 +39,45 @@ jobs:
         with:
           node-version: '24'
       - uses: actions/download-artifact@v4
-        if: needs.build.result == 'success'
+        if: github.event_name == 'workflow_run'
+        with:
+          name: preview-context
+          path: context
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+      - name: Verify build provenance and current PR head
+        id: context
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node tooling/scripts/verify-run.mjs
+      - uses: actions/download-artifact@v4
+        if: steps.context.outputs.skip != 'true' && steps.context.outputs.maintenance != 'true' && steps.context.outputs.remove != 'true'
         with:
           name: preview-package
           path: incoming
-      - name: Check current PR head
-        id: current
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+      - name: Register preview deployment
+        id: preview
+        if: steps.context.outputs.skip != 'true' && steps.context.outputs.maintenance != 'true' && steps.context.outputs.remove != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          REPOSITORY: ${{ github.repository }}
-          PR: ${{ github.event.pull_request.number }}
-          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
-          ACTION: ${{ github.event.action }}
-        run: |
-          if [ -n "$PR" ] && [ "$ACTION" != closed ]; then
-            actual=$(gh api "repos/$REPOSITORY/pulls/$PR" --jq '.head.sha')
-            state=$(gh api "repos/$REPOSITORY/pulls/$PR" --jq '.state')
-            if [ "$actual" != "$EXPECTED_SHA" ] || [ "$state" != open ]; then
-              echo "skip=true" >> "$GITHUB_OUTPUT"
-            fi
-          fi
+          PR: ${{ steps.context.outputs.pr }}
+          SHA: ${{ steps.context.outputs.sha }}
+        run: node tooling/scripts/deployment.mjs start
       - name: Update preview and storage report
-        if: steps.current.outputs.skip != 'true'
+        if: steps.context.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          REPOSITORY: ${{ github.repository }}
-          PR: ${{ github.event.pull_request.number || 'main' }}
-          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-          REMOVE: ${{ github.event.action == 'closed' }}
-          EVENT: ${{ github.event_name }}
+          PR: ${{ steps.context.outputs.pr }}
+          SHA: ${{ steps.context.outputs.sha }}
+          REMOVE: ${{ steps.context.outputs.remove }}
+          MAINTENANCE: ${{ steps.context.outputs.maintenance }}
         run: |
-          if [ "$EVENT" = schedule ]; then
-            node tooling/scripts/reconcile.mjs site="$GITHUB_WORKSPACE/site" repository="$REPOSITORY"
+          if [ "$MAINTENANCE" = true ]; then
+            node tooling/scripts/reconcile.mjs site="$GITHUB_WORKSPACE/site" repository="$GITHUB_REPOSITORY"
           else
-            node tooling/scripts/publish.mjs site="$GITHUB_WORKSPACE/site" package="$GITHUB_WORKSPACE/incoming" pr="$PR" sha="$SHA" remove="$REMOVE" repository="$REPOSITORY"
+            node tooling/scripts/publish.mjs site="$GITHUB_WORKSPACE/site" package="$GITHUB_WORKSPACE/incoming" pr="$PR" sha="$SHA" remove="$REMOVE" repository="$GITHUB_REPOSITORY"
           fi
           cd site
           git config user.name "github-actions[bot]"
@@ -103,11 +88,27 @@ jobs:
             git push origin gh-pages
           fi
       - uses: actions/configure-pages@v5
-        if: steps.current.outputs.skip != 'true'
+        if: steps.context.outputs.skip != 'true'
       - uses: actions/upload-pages-artifact@v3
-        if: steps.current.outputs.skip != 'true'
+        if: steps.context.outputs.skip != 'true'
         with:
           path: site
       - uses: actions/deploy-pages@v4
-        if: steps.current.outputs.skip != 'true'
+        if: steps.context.outputs.skip != 'true'
         id: deployment
+      - name: Publish personal URL to Deployment and PR
+        if: always() && steps.preview.outputs.id != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ steps.context.outputs.pr }}
+          SHA: ${{ steps.context.outputs.sha }}
+          DEPLOYMENT_ID: ${{ steps.preview.outputs.id }}
+          PUBLISHED: ${{ steps.deployment.outcome == 'success' }}
+          SITE: ${{ github.workspace }}/site
+        run: node tooling/scripts/deployment.mjs finish
+      - name: Retire closed PR deployment
+        if: steps.context.outputs.remove == 'true' && steps.deployment.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ steps.context.outputs.pr }}
+        run: node tooling/scripts/deployment.mjs retire

@@ -1,0 +1,51 @@
+name: Build preview package
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: preview-build-${{ github.event.pull_request.number || 'main' }}
+  cancel-in-progress: true
+jobs:
+  build:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        if: github.event.action != 'closed'
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: ${{ github.event.action != 'closed' && 'npm' || '' }}
+      - run: npm ci
+        if: github.event.action != 'closed'
+      - run: npm run build
+        if: github.event.action != 'closed'
+      - run: npm test
+        if: github.event.action != 'closed'
+      - name: Write build context
+        env:
+          PR: ${{ github.event.pull_request.number || 'main' }}
+          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          mkdir -p context
+          node -e 'require("fs").writeFileSync("context/event.json",JSON.stringify({pr:process.env.PR,sha:process.env.SHA,repository:process.env.REPOSITORY}))'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: preview-context
+          path: context
+          retention-days: 3
+      - uses: actions/upload-artifact@v4
+        if: github.event.action != 'closed'
+        with:
+          name: preview-package
+          path: dist/package
+          retention-days: 3
