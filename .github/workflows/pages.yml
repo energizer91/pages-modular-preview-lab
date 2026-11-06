@@ -96,6 +96,13 @@ jobs:
       - uses: actions/deploy-pages@v4
         if: steps.context.outputs.skip != 'true'
         id: deployment
+      - name: Verify served preview snapshots
+        id: served
+        if: steps.context.outputs.skip != 'true'
+        env:
+          SITE: ${{ github.workspace }}/site
+          PAGE_URL: ${{ steps.deployment.outputs.page_url }}
+        run: node tooling/scripts/verify-served.mjs
       - name: Publish personal URL to Deployment and PR
         if: always() && steps.preview.outputs.id != ''
         env:
@@ -103,7 +110,7 @@ jobs:
           PR: ${{ steps.context.outputs.pr }}
           SHA: ${{ steps.context.outputs.sha }}
           DEPLOYMENT_ID: ${{ steps.preview.outputs.id }}
-          PUBLISHED: ${{ steps.deployment.outcome == 'success' }}
+          PUBLISHED: ${{ steps.deployment.outcome == 'success' && steps.served.outcome == 'success' }}
           SITE: ${{ github.workspace }}/site
         run: node tooling/scripts/deployment.mjs finish
       - name: Retire closed PR deployment

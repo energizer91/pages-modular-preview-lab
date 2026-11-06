@@ -78,3 +78,5 @@ Actions artifacts — передача сборки, а не источник ru
 - https://docs.github.com/en/pages/getting-started-with-github-pages/github-pages-limits
 
 Каждый PR получает Deployment в environment preview-pr-N и обновляемый комментарий с прямой ссылкой. Success и ссылка появляются только после успешного deploy-pages. При закрытии Deployment становится inactive.
+
+После deploy-pages workflow проверяет commit/coreId манифестов с публичного URL, чтобы не объявить готовой устаревшую CDN-копию. Успешная публикация всего сайта также восстанавливает статусы и комментарии предыдущих превью, попавших в этот снимок.
