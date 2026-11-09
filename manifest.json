@@ -1,10 +1,10 @@
 {
   "label": "Main preview",
-  "commit": "2c5b76509c6cd04144896dbf0b9355ecaa547f1b",
+  "commit": "abea37c0ab149e3533ac0a9ccc669310697818e3",
   "coreId": "979fc99810320404",
   "coreBytes": 4151318,
   "remoteBytes": 109975,
   "pngBytes": 3687983,
   "entry": "./remote/remoteEntry.js",
-  "publishedAt": "2026-11-09T07:43:15.892Z"
+  "publishedAt": "2026-11-09T08:28:33.410Z"
 }
